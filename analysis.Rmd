@@ -1,0 +1,299 @@
+---
+title: "Stat 102 Paper on Remittances"
+author: "Ubaldo"
+date: "2025-12-28"
+output: pdf_document
+---
+
+# For Stat 102: Thought Process and Coding Time Series Model.
+With the help of Gemini Pro
+
+
+### Setup
+Loaded dataset, Loaded initial Libraries, and Made sure R recognizes Date column as Date
+- Data was taken here: https://docs.google.com/spreadsheets/d/14PGmyz-9xCzRhVwb7zryPJzqB30cIkaJ3to_G0kWuyw/edit?usp=sharing 
+```{r message=FALSE, warning=FALSE}
+library(readxl)
+library(tseries)
+library(ARDL)
+library(ggplot2)
+library(gridExtra)
+library(lmtest)
+library(DiagrammeR)
+raw_data <- read_excel("D:/New Documents/UPSE_5-1/STAT 102 THR/stat102 paper datastes/stat102 masterdatasheet.xlsx")
+
+df <- as.data.frame(raw_data)
+#Format date as date
+df$date <- as.Date(df$date)
+
+raw_data
+```
+
+### Data Transformations
+Transformed remittances and exchange rate to logarithmic because of their tendency to have exponential trends. Added Q2,Q3,Q4 seasonality dummies to check seasonality effect.
+```{r}
+# TRANSFORMATIONS
+# 1. Log Transformations (Fix Variance)
+df$ln_remit <- log(df$remit)
+df$ln_ex    <- log(df$ex)
+
+
+# 2. Q2-4 Dummy Variables (Seasonality)
+months <- as.numeric(format(df$date, "%m"))
+df$q2_dummy <- ifelse(months == 4, 1, 0)
+df$q3_dummy <- ifelse(months == 7, 1, 0)
+df$q4_dummy <- ifelse(months == 10, 1, 0)
+```
+
+# Create the Time Series Object
+Used the common ts() command, during the dataset cleaning in Sheets, the date that encompasses all variables is Q1 2014 to Q4 2024.
+```{r}
+# TIMESERIES
+vars_needed <- c("ln_remit", "typhoon", "ln_ex", "inf", "int", "unem", "ggrowth", "q2_dummy", "q3_dummy", "q4_dummy")
+df_model <- df[, vars_needed]
+ts_data <- ts(df_model, start = c(2014, 1), frequency = 4)
+head(df_model)
+```
+
+# EDA - Simple Timeseries Plots and Summary Table
+```{r}
+# Table
+vars_summary <- c("remit", "ex", "typhoon", "inf", "int", "unem", "ggrowth")
+stats_df <- df[, vars_summary]
+summary(stats_df)
+sapply(stats_df, sd)
+
+# Plotting Each Variable to Visually see any Correlations
+plot(ts_data[, c("ln_remit", "typhoon", "ln_ex", "ggrowth", "unem", "inf","int")], 
+     main = "Other Variables vs. Remittances", 
+     col = "blue")
+
+# Plotting the DIFFERENCES (Growth/Change) to see the Correlations
+plot(na.omit(diff(ts_data[, c("ln_remit", "typhoon", "ln_ex", "ggrowth", "unem", "inf", "int")])), 
+     main = "Quarterly Changes in Other Variables vs Remittances", 
+     col = "red") 
+```
+
+### Pre-Model Tests
+- We use the Augmented Dickey-Fuller (ADF) test to check the stationarity of variables at their original "Level."
+- HO: Non-Stationary, HA: Stationary.
+- Since we are doing Causal Inference and our Sample Size is relatively low, we plan to use ARDL (Autoregressive Distributed Lag) Model to determine significance of the variables effect on Remittances.
+- If there are any non-stationary, we will see if I(1) would make them stationary
+```{r}
+# PRE-MODEL TESTS (Manual ADF)
+## ADF UNIT ROOT TESTS")
+## Rule: p < 0.05 is Stationary. If p > 0.05, it's Non-Stationary.
+
+#1. Remittances
+print(adf.test(ts_data[,"ln_remit"]))
+
+#2. Exchange Rate
+print(adf.test(ts_data[,"ln_ex"]))
+
+#3. Typhoons
+print(adf.test(ts_data[,"typhoon"]))
+
+#4. Inflation
+print(adf.test(ts_data[,"inf"]))
+
+#5. Interest Rate
+print(adf.test(ts_data[,"int"]))
+
+#6. Unemployment
+print(adf.test(ts_data[,"unem"]))
+
+#7. GDP Growth
+print(adf.test(ts_data[,"ggrowth"]))
+
+```
+### Stationary Tests
+- Since none of the variables are Stationary, we take their first order difference
+- Checking for Stationarity after Differencing of Order 1. I(1)
+- Exchange rate and Interest rate fail the test so they are removed from the Model
+```{r}
+# CHECKING FOR I(2) - (TESTING DIFFERENCES) 
+# P-value MUST be < 0.05 here. If it is > 0.05, the variable is I(2) and must be dropped.
+
+#1. Diff(Remittances)
+print(adf.test(diff(ts_data[,"ln_remit"])))
+
+#2. Diff(Exchange Rate)
+print(adf.test(diff(ts_data[,"ln_ex"])))
+
+#3. Diff(Typhoons)
+print(adf.test(diff(ts_data[,"typhoon"])))
+
+#4. Diff(Inflation)
+print(adf.test(diff(ts_data[,"inf"])))
+
+#5. Diff(Interest Rate)
+print(adf.test(diff(ts_data[,"int"])))
+
+#6. Diff(Unemployment)
+print(adf.test(diff(ts_data[,"unem"])))
+
+#7. Diff(GDP Growth)
+print(adf.test(diff(ts_data[,"ggrowth"])))
+
+```
+
+### ARDL Model 1
+- Baseline Model. Initial ARDL Command had an AR(0) model but ARDL needs at least 1 Lag. We lag remittances itself (naive) and Typhoons while treating other variables having an immdiate effect to see first
+```{r}
+# RUNNING MANUAL ARDL MODEL (Because the best combination had AR(0) which we can't use)
+
+# 1. Define "Safe" Variables (Dropping Ex and Int because they are likely I(2))
+vars_safe <- c("ln_remit", "typhoon", "inf", "unem", "ggrowth", 
+               "q2_dummy", "q3_dummy", "q4_dummy")
+
+ts_final <- ts(df[, vars_safe], start = c(2014, 1), frequency = 4)
+
+# 2. Formula (No Ex, No Int)
+# Formula: Remit ~ Typhoon + GDP + Unem + Inf + Seasonality
+final_formula <- ln_remit ~ typhoon + ggrowth + unem + inf + q2_dummy + q3_dummy + q4_dummy
+
+# 3. DEFINE LAGS MANUALLY
+# Order of variables in formula:
+# 1. Remit (Dep) -> Set to 1 
+# 2. Typhoon     -> Set to 1 
+# 3. GGrowth     -> Set to 0
+# 4. Unem        -> Set to 0
+# 5. Inf         -> Set to 0
+# 6. Dummies     -> Set to 0
+
+manual_lags <- c(1, 1, 0, 0, 0, 0, 0, 0)
+
+# 4. Run Model
+# Note: Using 'ardl' function, NOT 'auto_ardl'
+best_model <- ardl(final_formula, 
+                   data = ts_final, 
+                   order = manual_lags)
+
+# FINAL MODEL RESULTS
+summary(best_model)
+```
+
+### Adding more Lags
+- Given that intial results have almost all variables not significant in affecting remittances, and that in theory, economies have reaction times, we lag all other variables in the model by 1.
+
+```{r}
+# MANUAL ARDL - ATTEMPT 2 (Adding Lags to other Variables in trying to find Significance)
+ts_final <- ts(df[, vars_safe], start = c(2014, 1), frequency = 4)
+
+# 1. Formula (Same)
+final_formula <- ln_remit ~ typhoon + ggrowth + unem + inf + q2_dummy + q3_dummy + q4_dummy
+
+# 2. DEFINE LAGS (THE IMPROVEMENT)
+# We are changing the 0s to 1s for the economic variables (t) and (t-1)
+# Vector order is same as Formula
+manual_lags_v2 <- c(1, 1, 1, 1, 1, 0, 0, 0)
+
+# 3. Run Model
+best_model_v2 <- ardl(final_formula, 
+                      data = ts_final, 
+                      order = manual_lags_v2)
+```
+
+```{r}
+#NEW RESULTS (WITH LAGS)
+summary(best_model_v2)
+
+
+#DIAGNOSTICS CHECK Model 2
+# We must re-check Serial Correlation because we added more variables
+#Serial Correlation (Goal: p > 0.05):
+print(bgtest(best_model_v2))
+
+#Bounds Test:
+print(bounds_f_test(best_model_v2, case = 3))
+```
+
+
+### Model 3
+- Model 2 failed serial correlation so we absorb that remaining correlated residuals by adding another lag for remittances (lag 2)
+- This model passes all diagnostics test after
+```{r}
+# FINAL ARDL MODEL
+# Increase Remit Lag to 2 to fix Serial Correlation (0.0484)
+
+# FINAL MODEL (v3)
+
+# 1. Formula
+final_formula <- ln_remit ~ typhoon + ggrowth + unem + inf + q2_dummy + q3_dummy + q4_dummy
+
+# 2. DEFINE LAGS
+# Vector Order: c(Remit, Typhoon, GGrowth, Unem, Inf, Dummies...)
+
+# CHANGE: We increase Remittances (1st number) to 2.
+# We keep Economic Vars at 1 (because Unemployment needs it).
+# We keep Dummies at 0.
+
+manual_lags_v3 <- c(2, 1, 1, 1, 1, 0, 0, 0)
+
+# 3. Run Model
+best_model_v3 <- ardl(final_formula, 
+                      data = ts_final, 
+                      order = manual_lags_v3)
+
+## RESULTS
+summary(best_model_v3)
+```
+
+```{r}
+# Model V3
+# DIAGNOSTICS
+
+#1. Serial Correlation (Hoping for p > 0.05)
+print(bgtest(best_model_v3))
+
+#2. Bounds Test
+print(bounds_f_test(best_model_v3, case = 3))
+
+library(strucchange)
+
+# Plot
+plot(efp(best_model_v3$residuals ~ 1, type = "Rec-CUSUM"), 
+     main = "Final Model Stability (CUSUM)")
+abline(h = c(-1.96, 1.96), col = "red", lty = 2)
+
+```
+
+
+### Comparing the 3 Models
+```{r}
+# COMPARISON: DIAGNOSTICS FOR ALL 3 MODELS
+
+# MODEL 1 (Simple)
+# Serial Correlation (p > 0.05?)
+print(bgtest(best_model)$p.value)
+
+# Normality (p > 0.05?)
+print(shapiro.test(residuals(best_model))$p.value)
+
+# Bounds Test F-stat
+print(bounds_f_test(best_model, case = 3)$statistic)
+
+#########
+# MODEL 2 (Added Econ Lags)
+# Serial Correlation (p > 0.05?)
+print(bgtest(best_model_v2)$p.value)
+
+# Normality (p > 0.05?)
+print(shapiro.test(residuals(best_model_v2))$p.value)
+
+# Bounds Test F-stat
+print(bounds_f_test(best_model_v2, case = 3)$statistic)
+
+#########
+# MODEL 3 (Final Polish - 2 Remit Lags)
+# Serial Correlation (p > 0.05?)
+print(bgtest(best_model_v3)$p.value)
+
+# Normality (p > 0.05?)
+print(shapiro.test(residuals(best_model_v3))$p.value)
+
+# Bounds Test F-stat
+print(bounds_f_test(best_model_v3, case = 3)$statistic)
+
+```
+
