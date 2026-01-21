@@ -16,20 +16,26 @@ This project performs a time-series analysis of cash remittances to the Philippi
 * **Unemployment:** A significant positive response to lagged unemployment, suggesting migrants react to economic distress with a one-quarter delay.
 * **Seasonality:** Strong seasonal spikes observed in Q3.
 
-## Econometric Implementation
+## 📊 Econometric Results
 
-### 1. ARDL Model Estimation
-To capture both short-run shocks and long-run equilibrium, I utilized the `ARDL` package. The final model specification (Model V3) uses 2 lags for remittances to correct for serial correlation, while assigning specific lag structures to economic variables based on theoretical reaction times.
+### 1. Final Model Output (ARDL V3)
+The model explains approximately 96% of the variance in quarterly remittances. Below are the key coefficients from the final estimation:
 
-```r
-# Final Model Specification: ARDL(2, 1, 1, 1, 1, 0, 0, 0)
-# Remittances are lagged by 2 quarters; Economic vars by 1 quarter.
-manual_lags_v3 <- c(2, 1, 1, 1, 1, 0, 0, 0)
+| Variable | Coefficient | p-value | Interpretation |
+| :--- | :--- | :--- | :--- |
+| **Remittances (t-1)** | **0.6276*** | < 0.001 | Strong inertia; past remittances predict future flows. |
+| **Typhoon (t)** | **0.0063.** | 0.053 | **Safety Net:** Immediate positive spike during disaster quarters. |
+| **Unemployment (t-1)** | **0.0127*** | 0.029 | **Insurance:** 1% rise in unemployment increases remittances by ~1.2% (lagged). |
+| **Q3 Dummy** | **0.0723*** | 0.028 | **Seasonality:** Significant increase in Q3 (Tuition/Pre-holiday). |
 
-best_model_v3 <- ardl(
-  ln_remit ~ typhoon + ggrowth + unem + inf + q2_dummy + q3_dummy + q4_dummy,
-  data = ts_final, 
-  order = manual_lags_v3
-)
+*(Significance codes: '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.10)*
 
-summary(best_model_v3)
+### 2. Data Transformation (Stationarity)
+To ensure robust results, variables were differenced to remove unit roots. The plot below visualizes the "shocks" (Quarterly Changes), clearly highlighting the volatility of Typhoons and the structural break caused by COVID-19 in 2020.
+
+![Quarterly Changes Plot](output/figures/diff_plot.png)
+
+### 3. Structural Stability Testing
+Given the massive economic shock of COVID-19, I performed a **CUSUM test** to ensure the model parameters didn't "break." As seen below, the recursive residuals (black line) remain strictly within the 5% critical bounds (red lines), confirming the model is stable and reliable.
+
+![CUSUM Plot](output/figures/cusum_plot.png)
